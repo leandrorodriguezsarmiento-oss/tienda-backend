@@ -4,92 +4,70 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 
 const app = express();
-
-// --- CONFIGURACIÓN DE MIDDLEWARES ---
 app.use(cors());
 app.use(express.json());
 
-// --- CONEXIÓN A MONGODB ---
-// Recuerda configurar MONGO_URI en las variables de entorno de Railway
 const mongoURI = process.env.MONGO_URI;
+mongoose.connect(mongoURI).then(() => console.log('✅ MongoDB Conectado'));
 
-mongoose.connect(mongoURI)
-    .then(() => console.log('✅ Conexión exitosa a MongoDB Atlas'))
-    .catch(err => {
-        console.error('❌ Error crítico de conexión:', err.message);
-        process.exit(1); 
-    });
-
-// --- MODELO DE DATOS (ESQUEMA) ---
-const PedidoSchema = new mongoose.Schema({
-    cliente: {
-        nombre: String,
-        telefono: String,
-        direccion: String
-    },
-    productos: Array,
-    subtotal: Number,
-    envio: Number,
-    total: Number,
-    metodoPago: String,
-    fecha: { type: Date, default: Date.now },
-    estado: { type: String, default: 'Pendiente' }
+// --- ESQUEMAS ---
+const ProductoSchema = new mongoose.Schema({
+    name: String,
+    brand: String,
+    price: Number,
+    specs: String,
+    image: String,
+    stock: { type: Number, default: 0 }
 });
+const Producto = mongoose.model('Producto', ProductoSchema);
 
+const PedidoSchema = new mongoose.Schema({
+    cliente: { nombre: String, telefono: String, direccion: String },
+    productos: Array,
+    total: Number,
+    fecha: { type: Date, default: Date.now }
+});
 const Pedido = mongoose.model('Pedido', PedidoSchema);
 
-// --- RUTAS DEL SERVIDOR ---
-
-// 1. Ruta de bienvenida (Para probar que el servidor funciona)
-app.get('/', (req, res) => {
-    res.send('🚀 Servidor de PhoneStore (Cuba) funcionando correctamente.');
+// --- RUTAS PÚBLICAS (TIENDA) ---
+app.get('/api/productos', async (req, res) => {
+    const prods = await Producto.find();
+    res.json(prods);
 });
 
-// 2. Ruta para recibir pedidos desde el index.html
 app.post('/api/pedidos', async (req, res) => {
     try {
-        const nuevoPedido = new Pedido(req.body);
-        const pedidoGuardado = await nuevoPedido.save();
-        
-        // Generamos un ID corto (últimos 6 caracteres del ID de Mongo)
-        const orderIdCorto = pedidoGuardado._id.toString().slice(-6).toUpperCase();
-        
-        console.log(`🛒 Nuevo Pedido Recibido: #${orderIdCorto}`);
-        
-        res.status(201).json({ 
-            success: true, 
-            orderId: orderIdCorto 
-        });
-    } catch (error) {
-        console.error("❌ Error al guardar pedido:", error);
-        res.status(500).json({ success: false, message: "Error interno del servidor" });
-    }
+        const nuevo = new Pedido(req.body);
+        // Descontar inventario
+        for (let item of req.body.productos) {
+            await Producto.findByIdAndUpdate(item._id, { $inc: { stock: -item.quantity } });
+        }
+        const guardado = await nuevo.save();
+        res.json({ success: true, orderId: guardado._id.toString().slice(-6).toUpperCase() });
+    } catch (e) { res.status(500).json({ success: false }); }
 });
 
-// 3. Ruta de Administración (Para ver todos los pedidos guardados)
-// IMPORTANTE: Cambia 'tu_clave_secreta_123' por una contraseña tuya
-app.get('/api/admin/pedidos', async (req, res) => {
-    const clave = req.headers['x-admin-key'];
-    
-    if (clave !== 'tu_clave_secreta_123') {
-        return res.status(401).json({ message: "Acceso no autorizado" });
-    }
+// --- RUTAS ADMIN (INVENTARIO) ---
+const checkAuth = (req, res, next) => {
+    if (req.headers['x-admin-key'] !== 'Leo.99100') return res.status(401).send('No autorizado');
+    next();
+};
 
-    try {
-        const pedidos = await Pedido.find().sort({ fecha: -1 });
-        res.json(pedidos);
-    } catch (error) {
-        console.error("❌ Error al obtener pedidos:", error);
-        res.status(500).json({ error: error.message });
-    }
+app.get('/api/admin/pedidos', checkAuth, async (req, res) => {
+    const pedidos = await Pedido.find().sort({ fecha: -1 });
+    res.json(pedidos);
 });
 
-// --- ARRANCAR EL SERVIDOR ---
+app.post('/api/admin/productos', checkAuth, async (req, res) => {
+    const nuevo = new Producto(req.body);
+    await nuevo.save();
+    res.json({ success: true });
+});
+
+app.delete('/api/admin/productos/:id', checkAuth, async (req, res) => {
+    await Producto.findByIdAndDelete(req.params.id);
+    res.json({ success: true });
+});
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`\n=========================================`);
-    console.log(`📡 SERVIDOR ACTIVO`);
-    console.log(`🔌 Puerto: ${PORT}`);
-    console.log(`🏠 Local: http://localhost:${PORT}`);
-    console.log(`=========================================\n`);
-});
+app.listen(PORT, () => console.log(`📡 Puerto: ${PORT}`));
