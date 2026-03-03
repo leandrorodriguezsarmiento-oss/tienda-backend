@@ -7,8 +7,17 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// CONFIGURACIÓN DE MONGODB
 const mongoURI = process.env.MONGO_URI;
-mongoose.connect(mongoURI).then(() => console.log('✅ MongoDB Conectado'));
+
+if (!mongoURI) {
+    console.error('❌ ERROR: No se encontró la variable MONGO_URI en Railway.');
+} else {
+    // Conexión con opciones de reintento para evitar caídas en Railway
+    mongoose.connect(mongoURI)
+        .then(() => console.log('✅ Conexión exitosa a MongoDB Atlas'))
+        .catch(err => console.error('❌ Error crítico de conexión:', err));
+}
 
 // --- ESQUEMAS ---
 const ProductoSchema = new mongoose.Schema({
@@ -29,16 +38,19 @@ const PedidoSchema = new mongoose.Schema({
 });
 const Pedido = mongoose.model('Pedido', PedidoSchema);
 
-// --- RUTAS PÚBLICAS (TIENDA) ---
+// --- RUTAS PÚBLICAS ---
+app.get('/', (req, res) => res.send('Servidor de PhoneStore funcionando correctamente 🚀'));
+
 app.get('/api/productos', async (req, res) => {
-    const prods = await Producto.find();
-    res.json(prods);
+    try {
+        const prods = await Producto.find();
+        res.json(prods);
+    } catch (e) { res.status(500).json([]); }
 });
 
 app.post('/api/pedidos', async (req, res) => {
     try {
         const nuevo = new Pedido(req.body);
-        // Descontar inventario
         for (let item of req.body.productos) {
             await Producto.findByIdAndUpdate(item._id, { $inc: { stock: -item.quantity } });
         }
@@ -47,27 +59,38 @@ app.post('/api/pedidos', async (req, res) => {
     } catch (e) { res.status(500).json({ success: false }); }
 });
 
-// --- RUTAS ADMIN (INVENTARIO) ---
+// --- RUTAS DE ADMINISTRACIÓN ---
 const checkAuth = (req, res, next) => {
+    // Usamos tu clave confirmada
     if (req.headers['x-admin-key'] !== 'Leo.99100') return res.status(401).send('No autorizado');
     next();
 };
 
 app.get('/api/admin/pedidos', checkAuth, async (req, res) => {
-    const pedidos = await Pedido.find().sort({ fecha: -1 });
-    res.json(pedidos);
+    try {
+        const pedidos = await Pedido.find().sort({ fecha: -1 });
+        res.json(pedidos);
+    } catch (e) { res.status(500).json([]); }
 });
 
 app.post('/api/admin/productos', checkAuth, async (req, res) => {
-    const nuevo = new Producto(req.body);
-    await nuevo.save();
-    res.json({ success: true });
+    try {
+        const nuevo = new Producto(req.body);
+        await nuevo.save();
+        res.json({ success: true });
+    } catch (e) { res.status(500).json({ success: false }); }
 });
 
 app.delete('/api/admin/productos/:id', checkAuth, async (req, res) => {
-    await Producto.findByIdAndDelete(req.params.id);
-    res.json({ success: true });
+    try {
+        await Producto.findByIdAndDelete(req.params.id);
+        res.json({ success: true });
+    } catch (e) { res.status(500).json({ success: false }); }
 });
 
+// CONFIGURACIÓN DE PUERTO PARA RAILWAY
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`📡 Puerto: ${PORT}`));
+// Escuchar en 0.0.0.0 es obligatorio para que Railway detecte el servicio
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`📡 Servidor PhoneStore activo en puerto ${PORT}`);
+});
